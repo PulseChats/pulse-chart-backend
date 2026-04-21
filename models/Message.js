@@ -14,8 +14,8 @@ const messageSchema = new mongoose.Schema(
     },
     content: {
       type: String,
-      required: true,
       trim: true,
+      default: '',
     },
     translatedContent: {
       type: String,
@@ -24,6 +24,22 @@ const messageSchema = new mongoose.Schema(
     isIncognito: {
       type: Boolean,
       default: false,
+    },
+    // File attachment fields
+    fileUrl: {
+      type: String,
+      trim: true,
+    },
+    fileName: {
+      type: String,
+      trim: true,
+    },
+    fileType: {
+      type: String,
+      trim: true,
+    },
+    fileSize: {
+      type: Number,
     },
   },
   {

@@ -5,43 +5,44 @@ const User = require('../models/User');
 // @route   POST /api/messages
 // @access  Private
 const sendMessage = async (req, res) => {
-  const { recipient, content, isIncognito } = req.body;
+  const { recipient, content, isIncognito, fileUrl, fileName, fileType, fileSize } = req.body;
 
-  if (!recipient || !content) {
+  if (!recipient || (!content && !fileUrl)) {
     return res.status(400).json({ message: 'Invalid data passed' });
   }
 
   try {
-    let translatedContent = content;
+    let translatedContent = content || '';
 
-    // Fetch sender and recipient to check language preferences
-    const senderUser = await User.findById(req.user._id);
-    const recipientUser = await User.findById(recipient);
+    // Fetch sender and recipient to check language preferences (only if there's text content)
+    if (content && content.trim()) {
+      const senderUser = await User.findById(req.user._id);
+      const recipientUser = await User.findById(recipient);
 
-    if (senderUser && recipientUser && senderUser.language !== recipientUser.language) {
-      const langMap = {
-        'English': 'en',
-        'Hindi': 'hi',
-        'French': 'fr',
-        'Spanish': 'es',
-      };
-      
-      const sourceLang = langMap[senderUser.language] || 'en';
-      const targetLang = langMap[recipientUser.language] || 'en';
-      
-      if (sourceLang !== targetLang) {
-        const langPair = `${sourceLang}|${targetLang}`;
-        const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(content)}&langpair=${langPair}`;
-        
-        try {
-          const response = await fetch(url);
-          const data = await response.json();
-          if (data && data.responseData && data.responseData.translatedText) {
-            translatedContent = data.responseData.translatedText;
+      if (senderUser && recipientUser && senderUser.language !== recipientUser.language) {
+        const langMap = {
+          'English': 'en',
+          'Hindi': 'hi',
+          'French': 'fr',
+          'Spanish': 'es',
+        };
+
+        const sourceLang = langMap[senderUser.language] || 'en';
+        const targetLang = langMap[recipientUser.language] || 'en';
+
+        if (sourceLang !== targetLang) {
+          const langPair = `${sourceLang}|${targetLang}`;
+          const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(content)}&langpair=${langPair}`;
+
+          try {
+            const response = await fetch(url);
+            const data = await response.json();
+            if (data && data.responseData && data.responseData.translatedText) {
+              translatedContent = data.responseData.translatedText;
+            }
+          } catch (apiError) {
+            console.error('Translation API Error:', apiError);
           }
-        } catch (apiError) {
-          console.error('Translation API Error:', apiError);
-          // Fall back to original content if API fails
         }
       }
     }
@@ -49,11 +50,19 @@ const sendMessage = async (req, res) => {
     const newMessage = {
       sender: req.user._id,
       recipient: recipient,
-      content: content,
+      content: content || '',
       isIncognito: isIncognito || false,
     };
 
-    if (translatedContent !== content) {
+    // Add file fields if present
+    if (fileUrl) {
+      newMessage.fileUrl = fileUrl;
+      newMessage.fileName = fileName || 'file';
+      newMessage.fileType = fileType || 'application/octet-stream';
+      if (fileSize) newMessage.fileSize = fileSize;
+    }
+
+    if (translatedContent !== content && content) {
       newMessage.translatedContent = translatedContent;
     }
 
@@ -66,6 +75,77 @@ const sendMessage = async (req, res) => {
     res.json(message);
   } catch (error) {
     console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+// @desc    Upload a file and create a message
+// @route   POST /api/messages/upload
+// @access  Private
+const uploadFile = async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ message: 'No file uploaded' });
+  }
+
+  const { recipient, content, isIncognito } = req.body;
+
+  if (!recipient) {
+    return res.status(400).json({ message: 'Recipient is required' });
+  }
+
+  try {
+    const fileUrl = `/uploads/${req.file.filename}`;
+    const fileName = req.file.originalname;
+    const fileType = req.file.mimetype;
+    const fileSize = req.file.size;
+
+    let translatedContent = content || '';
+
+    // Translate text content if present
+    if (content && content.trim()) {
+      const senderUser = await User.findById(req.user._id);
+      const recipientUser = await User.findById(recipient);
+
+      if (senderUser && recipientUser && senderUser.language !== recipientUser.language) {
+        const langMap = { 'English': 'en', 'Hindi': 'hi', 'French': 'fr', 'Spanish': 'es' };
+        const sourceLang = langMap[senderUser.language] || 'en';
+        const targetLang = langMap[recipientUser.language] || 'en';
+
+        if (sourceLang !== targetLang) {
+          try {
+            const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(content)}&langpair=${sourceLang}|${targetLang}`;
+            const response = await fetch(url);
+            const data = await response.json();
+            if (data?.responseData?.translatedText) {
+              translatedContent = data.responseData.translatedText;
+            }
+          } catch (e) { console.error('Translation API Error:', e); }
+        }
+      }
+    }
+
+    const newMessage = {
+      sender: req.user._id,
+      recipient,
+      content: content || '',
+      isIncognito: isIncognito === 'true' || isIncognito === true,
+      fileUrl,
+      fileName,
+      fileType,
+      fileSize,
+    };
+
+    if (translatedContent !== content && content) {
+      newMessage.translatedContent = translatedContent;
+    }
+
+    let message = await Message.create(newMessage);
+    message = await message.populate('sender', 'username email');
+    message = await message.populate('recipient', 'username email');
+
+    res.json(message);
+  } catch (error) {
+    console.error('Upload Error:', error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
@@ -117,4 +197,4 @@ const deleteIncognitoMessages = async (req, res) => {
   }
 };
 
-module.exports = { sendMessage, getMessages, deleteIncognitoMessages };
+module.exports = { sendMessage, getMessages, deleteIncognitoMessages, uploadFile };
